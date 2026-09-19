@@ -1,0 +1,1 @@
+async function e(e,t){let n=e.slice(3),r=Uint8Array.from(atob(n),e=>e.charCodeAt(0)),i=new Blob([r]).stream().pipeThrough(new DecompressionStream(t)),a=await new Response(i).text();try{return JSON.parse(a)}catch{return a}}function t(t){return e(t,`gzip`)}function n(t){return e(t,`deflate`)}export{n,t};

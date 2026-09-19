@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Screeps Client</title>
+    <style>
+      *, *::before, *::after {
+        box-sizing: border-box;
+      }
+      html, body, #root {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #0d1117;
+        color: #c9d1d9;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      @keyframes motd-in {
+        from { opacity: 0; transform: translate(-50%, calc(-50% + 8px)); }
+        to { opacity: 1; transform: translate(-50%, -50%); }
+      }
+    </style>
+    <script type="module" crossorigin src="/client/_client/index-D7Oksv-H.js"></script>
+    <link rel="modulepreload" crossorigin href="/client/_client/rolldown-runtime-Bh1tDfsg.js">
+    <link rel="modulepreload" crossorigin href="/client/_client/vendor-pixi-BkKb2p9R.js">
+    <link rel="modulepreload" crossorigin href="/client/_client/chunk-2AAURUUC-CWkNrR0q.js">
+    <link rel="modulepreload" crossorigin href="/client/_client/dist-CeLkRZhT.js">
+    <link rel="modulepreload" crossorigin href="/client/_client/core-BpboMUoB.js">
+    <link rel="modulepreload" crossorigin href="/client/_client/clientStore-C0FcTLRg.js">
+    <link rel="modulepreload" crossorigin href="/client/_client/allianceStore-CM_E1xbh.js">
+    <link rel="modulepreload" crossorigin href="/client/_client/roomDataStore-DQZRXMmC.js">
+    <link rel="modulepreload" crossorigin href="/client/_client/customUiStore-DWihw0PN.js">
+    <link rel="modulepreload" crossorigin href="/client/_client/PopoutOverlay-Di1JcWRH.js">
+    <link rel="modulepreload" crossorigin href="/client/_client/tsClient-DjbrqJYE.js">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
