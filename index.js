@@ -153,6 +153,11 @@ function createRateLimiter({ name, windowMs, max }) {
       }
     }
     const key = `${name}:${clientIp(req)}`
+    if (!global.__rateLimitKeysSeen) global.__rateLimitKeysSeen = new Set()
+    if (!global.__rateLimitKeysSeen.has(key)) {
+      global.__rateLimitKeysSeen.add(key)
+      console.log(`[screeps-mod-client][rate-debug] ${key} peer=${(req.socket && req.socket.remoteAddress) || '?'} cf=${req.get('cf-connecting-ip') || '-'} xff=${req.get('x-forwarded-for') || '-'}`)
+    }
     const entry = hits.get(key)
     if (!entry || entry.reset <= now) {
       hits.set(key, { count: 1, reset: now + windowMs })
