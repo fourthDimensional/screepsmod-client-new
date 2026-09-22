@@ -2,6 +2,7 @@
 
 const path = require('node:path')
 const fs = require('node:fs')
+const os = require('node:os')
 const crypto = require('node:crypto')
 const express = require('express')
 const pkg = require('./package.json')
@@ -125,8 +126,25 @@ function isTrustedProxyPeer(ip) {
   if (isPrivateOrLoopback(ip)) return true
   const normalized = normalizeIp(ip)
   if (!normalized || normalized.includes(':')) return false
+  // Docker may pick a gateway from a publicly routed range (e.g. 172.80.x.x is not
+  // RFC1918), so trust our own interfaces' subnets: peers there are the host side of
+  // the Docker network (published-port traffic, cloudflared, host proxies), never a
+  // direct Internet client (those keep their public source address).
+  if (containerSubnets.some((cidr) => ipv4InCidr(normalized, cidr))) return true
   return cfRanges.some((cidr) => ipv4InCidr(normalized, cidr))
 }
+
+function localSubnets() {
+  const subnets = []
+  for (const entries of Object.values(os.networkInterfaces())) {
+    for (const entry of entries || []) {
+      if (entry.family === 'IPv4' && entry.cidr) subnets.push(entry.cidr)
+    }
+  }
+  return subnets
+}
+
+const containerSubnets = localSubnets()
 
 function clientIp(req) {
   const peer = (req.socket && req.socket.remoteAddress) || ''
@@ -153,11 +171,6 @@ function createRateLimiter({ name, windowMs, max }) {
       }
     }
     const key = `${name}:${clientIp(req)}`
-    if (!global.__rateLimitKeysSeen) global.__rateLimitKeysSeen = new Set()
-    if (!global.__rateLimitKeysSeen.has(key)) {
-      global.__rateLimitKeysSeen.add(key)
-      console.log(`[screeps-mod-client][rate-debug] ${key} peer=${(req.socket && req.socket.remoteAddress) || '?'} cf=${req.get('cf-connecting-ip') || '-'} xff=${req.get('x-forwarded-for') || '-'}`)
-    }
     const entry = hits.get(key)
     if (!entry || entry.reset <= now) {
       hits.set(key, { count: 1, reset: now + windowMs })
