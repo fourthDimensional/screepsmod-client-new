@@ -47,7 +47,7 @@ On top of the single-shard fixes, this fork adds:
 - **Club-password gate** on `POST /api/register/submit` (constant-time compare; the vendored client build has the matching "Club Password" field on the signup form).
 - **Security headers** on every response (CSP with a per-request nonce, `nosniff`, frame denial, referrer/permissions policies, COOP/CORP, `noindex`, HSTS when served over HTTPS) and no `X-Powered-By`.
 - **Rate limiting** for registration, signin, and username/email availability checks.
-- **Client-IP handling for a publicly reachable origin:** `CF-Connecting-IP`/`X-Forwarded-For` are only trusted when the TCP peer is loopback or a Cloudflare edge range, so direct clients cannot spoof their way around rate limits.
+- **Client-IP handling for a publicly reachable origin:** `CF-Connecting-IP`/`X-Forwarded-For` are only trusted when the TCP peer is loopback, a private/link-local address (Docker gateway, host reverse proxy, tunnel), or a Cloudflare edge range, so direct clients cannot spoof their way around rate limits.
 
 ### Docker example
 

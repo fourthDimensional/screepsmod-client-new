@@ -53,9 +53,12 @@ function escapeHtml(value) {
 //
 // The origin port is published publicly, so forwarding headers can be spoofed by
 // anyone connecting directly. They are only trusted when the immediate TCP peer is
-// loopback (the host's cloudflared/tunnel or a host reverse proxy) or one of
-// Cloudflare's published edge ranges. HTTP/3 and tunneled requests then keep their
-// per-client identity; direct connections are keyed on their socket address.
+// loopback, a private/link-local address, or one of Cloudflare's published edge
+// ranges. In this deployment the backend runs in a container, so host-originated
+// requests (curl, cloudflared, a host reverse proxy) arrive with the Docker bridge
+// gateway as their peer address — private, hence trusted. Direct Internet clients
+// keep their public source address (Docker DNAT) and are keyed on it, so they cannot
+// spoof per-IP rate limiting.
 
 const CF_IPV4_URL = 'https://www.cloudflare.com/ips-v4'
 let cfRanges = []
@@ -100,11 +103,28 @@ function ipv4InCidr(ip, cidr) {
   return (ipInt & mask) === (rangeInt & mask)
 }
 
-function isTrustedProxyPeer(ip) {
+function isPrivateOrLoopback(ip) {
   const normalized = normalizeIp(ip)
   if (!normalized) return false
   if (normalized === '127.0.0.1' || normalized === '::1') return true
-  if (normalized.includes(':')) return false
+  if (normalized.includes(':')) {
+    const lower = normalized.toLowerCase()
+    return lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe80')
+  }
+  const octets = normalized.split('.').map(Number)
+  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet))) return false
+  const [a, b] = octets
+  if (a === 10) return true
+  if (a === 172 && b >= 16 && b <= 31) return true
+  if (a === 192 && b === 168) return true
+  if (a === 169 && b === 254) return true
+  return false
+}
+
+function isTrustedProxyPeer(ip) {
+  if (isPrivateOrLoopback(ip)) return true
+  const normalized = normalizeIp(ip)
+  if (!normalized || normalized.includes(':')) return false
   return cfRanges.some((cidr) => ipv4InCidr(normalized, cidr))
 }
 
