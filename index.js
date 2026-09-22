@@ -94,6 +94,12 @@ module.exports = function (config) {
 
   const indexFile = path.join(distDir, 'index.html')
 
+  // Optional signup gate. When SCREEPS_CLUB_PASSWORD is set, /api/register/submit
+  // requires a matching `clubPassword` field in the JSON body; the embedded client
+  // asks for it on the registration form. Unset means open registration
+  // (screepsmod-auth's normal behaviour).
+  const clubPassword = process.env.SCREEPS_CLUB_PASSWORD
+
   async function sendInjectedIndex(req, res) {
     const version = await bootstrapVersion(req)
     res.setHeader('Cache-Control', REVALIDATE_CACHE)
@@ -101,6 +107,22 @@ module.exports = function (config) {
   }
 
   config.backend.on('expressPreConfig', (app) => {
+    if (clubPassword) {
+      // Registered before the screepsmod-auth router (this mod must load first in
+      // mods.json), so an invalid club password never reaches the register handler.
+      // Returns 200 + { error } so the client form can display it, matching the
+      // shape screepsmod-auth uses for its own registration errors.
+      app.use('/api/register/submit', express.json(), (req, res, next) => {
+        if (req.method !== 'POST') return next()
+        const supplied = req.body && req.body.clubPassword
+        if (typeof supplied !== 'string' || supplied !== clubPassword) {
+          res.status(200).json({ ok: 0, error: 'Invalid club password' })
+          return
+        }
+        next()
+      })
+    }
+
     const indexRoutes = mountPath === '/' ? ['/', '/index.html'] : [mountPath, mountPath + '/', mountPath + '/index.html']
 
     app.get(indexRoutes, (req, res) => {
