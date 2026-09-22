@@ -16,7 +16,7 @@ Add the package to your server's `mods.json`:
 ```json
 {
   "mods": [
-    "node_modules/screeps-mod-client"
+    "node_modules/screepsmod-client-new"
   ]
 }
 ```
@@ -33,12 +33,28 @@ Two layers, in order of precedence:
 | --- | --- | --- | --- |
 | Mount path | `SCREEPS_MOD_CLIENT_MOUNT_PATH` | `mountPath` | `/client` |
 | Redirect `/` → mount path | `SCREEPS_MOD_CLIENT_ROOT_REDIRECT` | `rootRedirect` | `true` |
+| Page title | `SCREEPS_CLIENT_TITLE` | `title` | `Alknost.space` |
+| Signup club password (required on register when set) | `SCREEPS_CLUB_PASSWORD` | — | unset (open registration) |
+| Disable rate limiting | `SCREEPS_RATE_LIMIT_DISABLED=1` | — | off |
+| Register attempts per 15 min per IP | `SCREEPS_RATE_LIMIT_REGISTER_MAX` | — | `5` |
+| Signin attempts per 15 min per IP | `SCREEPS_RATE_LIMIT_SIGNIN_MAX` | — | `20` |
+| Username/email checks per min per IP | `SCREEPS_RATE_LIMIT_CHECK_MAX` | — | `60` |
+
+## Fork additions
+
+On top of the single-shard fixes, this fork adds:
+
+- **Club-password gate** on `POST /api/register/submit` (constant-time compare; the vendored client build has the matching "Club Password" field on the signup form).
+- **Security headers** on every response (CSP with a per-request nonce, `nosniff`, frame denial, referrer/permissions policies, COOP/CORP, `noindex`, HSTS when served over HTTPS) and no `X-Powered-By`.
+- **Rate limiting** for registration, signin, and username/email availability checks.
+- **Client-IP handling for a publicly reachable origin:** `CF-Connecting-IP`/`X-Forwarded-For` are only trusted when the TCP peer is loopback or a Cloudflare edge range, so direct clients cannot spoof their way around rate limits.
 
 ### Docker example
 
 ```sh
 docker run -e SCREEPS_MOD_CLIENT_MOUNT_PATH=/play \
            -e SCREEPS_MOD_CLIENT_ROOT_REDIRECT=false \
+           -e SCREEPS_CLUB_PASSWORD=... \
            screeps/private-server
 ```
 

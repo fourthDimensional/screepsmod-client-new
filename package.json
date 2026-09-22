@@ -1,7 +1,7 @@
 {
   "name": "screepsmod-client-new",
-  "version": "0.2.33-single-shard-room-channel.2-club.1",
-  "description": "Screeps server mod that serves a patched screeps-client at /client (single-shard room channel fixes) with an optional club-password gate on registration and a club-password field in the signup form.",
+  "version": "0.2.33-single-shard-room-channel.2-club.2",
+  "description": "Screeps server mod that serves a patched screeps-client at /client (single-shard room channel fixes) with a club-password registration gate, security headers, rate limiting, and a branded client title.",
   "type": "commonjs",
   "main": "index.js",
   "files": [

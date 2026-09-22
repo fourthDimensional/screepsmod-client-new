@@ -2,6 +2,7 @@
 
 const path = require('node:path')
 const fs = require('node:fs')
+const crypto = require('node:crypto')
 const express = require('express')
 const pkg = require('./package.json')
 
@@ -17,6 +18,11 @@ function readBool(envName, modValue, fallback) {
 
 function readString(envName, modValue, fallback) {
   return process.env[envName] ?? modValue ?? fallback
+}
+
+function readInt(envName, fallback) {
+  const value = parseInt(process.env[envName], 10)
+  return Number.isFinite(value) ? value : fallback
 }
 
 // Vite content-hashes everything under the assets dir (_client/), so those URLs
@@ -37,6 +43,151 @@ function setStaticCacheHeaders(res, filePath) {
 
 function jsonForScript(value) {
   return JSON.stringify(value).replace(/</g, '\\u003c')
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+// ── client address ────────────────────────────────────────────────────────────
+//
+// The origin port is published publicly, so forwarding headers can be spoofed by
+// anyone connecting directly. They are only trusted when the immediate TCP peer is
+// loopback (the host's cloudflared/tunnel or a host reverse proxy) or one of
+// Cloudflare's published edge ranges. HTTP/3 and tunneled requests then keep their
+// per-client identity; direct connections are keyed on their socket address.
+
+const CF_IPV4_URL = 'https://www.cloudflare.com/ips-v4'
+let cfRanges = []
+
+function refreshCloudflareRanges() {
+  fetch(CF_IPV4_URL)
+    .then((res) => (res.ok ? res.text() : null))
+    .then((text) => {
+      if (text) cfRanges = text.split(/\s+/).filter(Boolean)
+    })
+    .catch(() => { /* keep the previous list */ })
+}
+
+refreshCloudflareRanges()
+setInterval(refreshCloudflareRanges, 24 * 60 * 60 * 1000).unref?.()
+
+function normalizeIp(ip) {
+  return ip && ip.startsWith('::ffff:') ? ip.slice(7) : ip
+}
+
+function ipv4ToInt(ip) {
+  const parts = ip.split('.')
+  if (parts.length !== 4) return null
+  let value = 0
+  for (const part of parts) {
+    const octet = Number(part)
+    if (!Number.isInteger(octet) || octet < 0 || octet > 255) return null
+    value = (value << 8) | octet
+  }
+  return value >>> 0
+}
+
+function ipv4InCidr(ip, cidr) {
+  const [range, bitsRaw] = cidr.split('/')
+  const bits = parseInt(bitsRaw, 10)
+  const ipInt = ipv4ToInt(ip)
+  const rangeInt = ipv4ToInt(range)
+  if (ipInt === null || rangeInt === null || !Number.isInteger(bits)) return false
+  if (bits <= 0) return true
+  if (bits > 32) return false
+  const mask = (0xffffffff << (32 - bits)) >>> 0
+  return (ipInt & mask) === (rangeInt & mask)
+}
+
+function isTrustedProxyPeer(ip) {
+  const normalized = normalizeIp(ip)
+  if (!normalized) return false
+  if (normalized === '127.0.0.1' || normalized === '::1') return true
+  if (normalized.includes(':')) return false
+  return cfRanges.some((cidr) => ipv4InCidr(normalized, cidr))
+}
+
+function clientIp(req) {
+  const peer = (req.socket && req.socket.remoteAddress) || ''
+  if (!isTrustedProxyPeer(peer)) return peer || 'unknown'
+  const cfIp = req.get && req.get('cf-connecting-ip')
+  if (cfIp && cfIp.trim()) return cfIp.trim()
+  const forwarded = (req.get && req.get('x-forwarded-for')) || ''
+  const first = forwarded.split(',')[0].trim()
+  return first || peer || 'unknown'
+}
+
+// ── rate limiting ─────────────────────────────────────────────────────────────
+
+const rateLimitsDisabled = readBool('SCREEPS_RATE_LIMIT_DISABLED', undefined, false)
+
+function createRateLimiter({ name, windowMs, max }) {
+  const hits = new Map()
+  return function rateLimit(req, res, next) {
+    if (rateLimitsDisabled || max <= 0) return next()
+    const now = Date.now()
+    if (hits.size > 5000) {
+      for (const [key, entry] of hits) {
+        if (entry.reset <= now) hits.delete(key)
+      }
+    }
+    const key = `${name}:${clientIp(req)}`
+    const entry = hits.get(key)
+    if (!entry || entry.reset <= now) {
+      hits.set(key, { count: 1, reset: now + windowMs })
+      return next()
+    }
+    entry.count += 1
+    if (entry.count > max) {
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil((entry.reset - now) / 1000))))
+      res.status(429).json({ ok: 0, error: 'Too many requests, try again later' })
+      return
+    }
+    next()
+  }
+}
+
+// ── security headers ──────────────────────────────────────────────────────────
+
+const HSTS = 'max-age=31536000; includeSubDomains'
+
+function securityHeaders(req, res, next) {
+  const nonce = crypto.randomBytes(16).toString('base64')
+  res.locals.cspNonce = nonce
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}' 'unsafe-eval'`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https://s3.amazonaws.com https://www.leagueofautomatednations.com",
+    "connect-src 'self' https://s3.amazonaws.com https://www.leagueofautomatednations.com",
+    "worker-src 'self' blob:",
+    "child-src 'self' blob:",
+    "font-src 'self' data:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join('; '))
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'DENY')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()')
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups')
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-site')
+  res.setHeader('X-Robots-Tag', 'noindex')
+  if (req.get('x-forwarded-proto') === 'https' || req.secure) {
+    res.setHeader('Strict-Transport-Security', HSTS)
+  }
+  next()
+}
+
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false
+  const aBytes = Buffer.from(a, 'utf8')
+  const bBytes = Buffer.from(b, 'utf8')
+  if (aBytes.length !== bBytes.length) return false
+  return crypto.timingSafeEqual(aBytes, bBytes)
 }
 
 // The client fetches `/api/version` on load (pre-login and again post-connect) to
@@ -65,15 +216,16 @@ async function bootstrapVersion(req) {
   }
 }
 
-function renderInjectedIndex(indexFile, version) {
+function renderInjectedIndex(indexFile, version, nonce, title) {
   const metadata = jsonForScript({
     kind: 'screeps-mod',
     packageName: pkg.name,
     version: pkg.version,
   })
   const bootstrap = version ? `;window.__SCREEPS_BOOTSTRAP__=${jsonForScript(version)}` : ''
-  const script = `<script>window.__SCREEPS_CLIENT_EMBEDDED__=${metadata}${bootstrap}</script>`
-  const html = fs.readFileSync(indexFile, 'utf8')
+  const script = `<script nonce="${nonce}">window.__SCREEPS_CLIENT_EMBEDDED__=${metadata}${bootstrap}</script>`
+  let html = fs.readFileSync(indexFile, 'utf8')
+  html = html.replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(title)}</title>`)
   return html.includes('</head>') ? html.replace('</head>', `${script}</head>`) : script + html
 }
 
@@ -87,6 +239,7 @@ module.exports = function (config) {
   mountPath = mountPath.replace(/\/+$/, '') || '/'
 
   const rootRedirect = readBool('SCREEPS_MOD_CLIENT_ROOT_REDIRECT', modCfg.rootRedirect, true)
+  const clientTitle = readString('SCREEPS_CLIENT_TITLE', modCfg.title, 'Alknost.space')
   // Vendored in-tree (./dist/embedded) rather than resolved from a "screeps-client" npm
   // dependency: this fork carries a RoomStore fix (also subscribe the unprefixed
   // `room:<room>` channel) that private servers need but the upstream package doesn't have.
@@ -100,22 +253,47 @@ module.exports = function (config) {
   // (screepsmod-auth's normal behaviour).
   const clubPassword = process.env.SCREEPS_CLUB_PASSWORD
 
+  const registerLimiter = createRateLimiter({
+    name: 'register',
+    windowMs: 15 * 60_000,
+    max: readInt('SCREEPS_RATE_LIMIT_REGISTER_MAX', 5),
+  })
+  const signinLimiter = createRateLimiter({
+    name: 'signin',
+    windowMs: 15 * 60_000,
+    max: readInt('SCREEPS_RATE_LIMIT_SIGNIN_MAX', 20),
+  })
+  const checkLimiter = createRateLimiter({
+    name: 'check',
+    windowMs: 60_000,
+    max: readInt('SCREEPS_RATE_LIMIT_CHECK_MAX', 60),
+  })
+
   async function sendInjectedIndex(req, res) {
     const version = await bootstrapVersion(req)
     res.setHeader('Cache-Control', REVALIDATE_CACHE)
-    res.type('html').send(renderInjectedIndex(indexFile, version))
+    res.type('html').send(renderInjectedIndex(indexFile, version, res.locals.cspNonce, clientTitle))
   }
 
   config.backend.on('expressPreConfig', (app) => {
+    app.disable('x-powered-by')
+    app.use(securityHeaders)
+
+    app.use('/api/register/check-username', checkLimiter)
+    app.use('/api/register/check-email', checkLimiter)
+    app.use('/api/auth/signin', signinLimiter)
+    app.use('/api/register/submit', registerLimiter)
+
     if (clubPassword) {
       // Registered before the screepsmod-auth router (this mod must load first in
       // mods.json), so an invalid club password never reaches the register handler.
       // Returns 200 + { error } so the client form can display it, matching the
-      // shape screepsmod-auth uses for its own registration errors.
+      // shape screepsmod-auth uses for its own registration errors. The comparison is
+      // constant-time to avoid leaking the password through response timing.
       app.use('/api/register/submit', express.json(), (req, res, next) => {
         if (req.method !== 'POST') return next()
         const supplied = req.body && req.body.clubPassword
-        if (typeof supplied !== 'string' || supplied !== clubPassword) {
+        if (!safeEqual(supplied, clubPassword)) {
           res.status(200).json({ ok: 0, error: 'Invalid club password' })
           return
         }
@@ -153,5 +331,5 @@ module.exports = function (config) {
     })
   })
 
-  console.log(`[screeps-mod-client] serving client at ${mountPath}/ (rootRedirect=${rootRedirect})`)
+  console.log(`[screeps-mod-client] serving client at ${mountPath}/ (rootRedirect=${rootRedirect}, title=${clientTitle})`)
 }
